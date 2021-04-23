@@ -4,34 +4,52 @@
 set -Eeuo pipefail
 
 # Call the cleanup function in case an error or interruptions occurs.
-trap cleanup SIGINT SIGTERM ERR
-
-# Call the cleanup function when the script ended successfully.
-#trap safe_cleanup EXIT
+trap cleanerr SIGINT SIGTERM ERR
+trap cleanexit EXIT
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd -P)
 
 usage() {
   cat <<EOF
-Usage: $(basename "${BASH_SOURCE[0]}") [-h] [-v] [-p] [-o output_folder] -g GSE
+Usage: $(basename "${BASH_SOURCE[0]}") [-h] [-v] [-p] [-o output_folder] -g GEO
 
-The script takes in input a GEO id and download all teh fastqs associated with the to it. A metadata file describing the 
-data is also provided. The GEO id could be referred to a project a subproject or a single dataset.
+The script takes in input a GEO id and download all the fastqs 
+associated to it along with metadata describing the data.
+The GEO id could be a sample id (GSM*) or a series id (GSE*)
+
+Dependencies:
+
+    (Debian-based linux) sudo apt install ncbi-entrez-direct sra-toolkit
+    (Conda) conda install -c bioconda entrez-direct sra-tools
 
 Available options:
 
 -h, --help      Print this help and exit
 -v, --verbose   Print script debug info
 -g, --geo       GEO id
--p, --parallel  Number of cores to use. Be carefull to not kill your I/O. Default: 1
--o, --output    Path to the output folder. Default: new folder in the current directory using the GEO id as name.
+-p, --cpu       Number of cores to use. Be carefull to not kill your I/O. Default: 1
+-o, --output    Path to the output folder. 
+                Default: new folder in the current directory using the GEO id as name.
 EOF
   exit
 }
 
-cleanup() {
-  trap - SIGINT SIGTERM ERR EXIT
-  # script cleanup here
+cleanerr() {
+  # Clean up after an error
+  if [[ -d ${output} ]]
+  then
+    msg "Cleaning up directory '${output}'"
+    rm -r ${output}
+  fi
+}
+
+cleanexit() {
+  # Clean the prefetch tmp folder
+  if [[ -d "${output}/prefetch" ]]
+  then
+    msg "Cleaning up directory '${output}'"
+    rm -r "${output}/prefecth"
+  fi
 }
 
 setup_colors() {
@@ -45,6 +63,7 @@ setup_colors() {
 msg() {
   echo >&2 -e "${1-}"
 }
+export -f msg
 
 die() {
   local msg=$1
@@ -54,41 +73,81 @@ die() {
 }
 
 parse_params() {
-  # default values of variables set from params
-  flag=0
-  param=''
+  # Default values of variables set from params
+  cpu=1
+  output=''
+  
+  args=("$@")
 
   while :; do
     case "${1-}" in
     -h | --help) usage ;;
     -v | --verbose) set -x ;;
     --no-color) NO_COLOR=1 ;;
-    -f | --flag) flag=1 ;; # example flag
-    -p | --param) # example named parameter
-      param="${2-}"
-      shift
-      ;;
+    -p | --cpu) 
+               cpu="${2-}"
+               shift
+               ;;
+    -g | --geo) 
+               geo="${2-}"
+               shift
+               ;;
+    -o | --output) 
+               output="${2-}"
+               shift
+               ;;
     -?*) die "Unknown option: $1" ;;
     *) break ;;
     esac
     shift
   done
 
-  args=("$@")
-
-  # check required params and arguments
-  [[ -z "${geo-}" ]] && die "Missing required parameter: GEO id"
+  # Check required params and arguments
   [[ ${#args[@]} -eq 0 ]] && die "Missing script arguments"
+  [[ -z "${geo-}" ]] && die "Missing required parameter: GEO id"
+  [[ -z "${output-}" ]] && output="${geo}" # Default output to GEO id
+  [[ -d "${output}" ]] && die "Output directory already exists"
 
   return 0
 }
 
+download(){
+    # Helper function for downloading the fastqs.
+    msg "Downloading ${1}"
+    prefetch -q -O "${output}/prefetch" "${1}"
+    vdb-validate -q "${1}"
+    fastq-dump -I --gzip --split-files -O "${output}" "${1}"
+}
+export -f download
+
 parse_params "$@"
 setup_colors
 
-# script logic here
+# Create the output folder
+msg "Creating output folder in ${output}"
+mkdir -p ${output}
 
-msg "${RED}Read parameters:${NOFORMAT}"
-msg "- flag: ${flag}"
-msg "- param: ${param}"
-msg "- arguments: ${args[*]-}"
+# Find all the SRA associated with the GEO id
+msg "Querying for all the SRA ids associated with ${geo}"
+mapfile -t SRA_IDS < <(esearch -db gds -query "${geo}[ACCN] AND GSM[ETYP]" |\
+                       efetch -format docsum | \
+                       xtract -pattern ExtRelation -element TargetObject)
+
+# Collect all the metadata associated with the SRA ids
+for id in "${SRA_IDS[@]}"
+do
+   msg "Downloading metadata for ${id}"
+   esearch -db sra -query ${id} |\
+    efetch -format runinfo >> "${output}/${geo}-metadata.temp"
+done
+
+# Removing the duplicated headers and empty lines
+sort "${output}/${geo}-metadata.temp" | uniq | awk 'NF' > "${output}/${geo}-metadata.csv"
+rm "${output}/${geo}-metadata.temp"
+
+# Download the fastq files
+msg "Starting fastq downloads"
+esearch -db gds -query "${geo}[ACCN] AND GSM[ETYP]" | \
+ efetch -format docsum | \
+ xtract -pattern ExtRelation -element TargetObject | \
+ xargs -n 1 -P "${cpu}" bash -c 'download "$@"'
