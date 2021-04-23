@@ -48,7 +48,7 @@ cleanexit() {
   if [[ -d "${output}/prefetch" ]]
   then
     msg "Cleaning up directory '${output}'"
-    rm -r "${output}/prefecth"
+    rm -r "${output}/prefetch"
   fi
 }
 
@@ -113,19 +113,20 @@ parse_params() {
 
 download(){
     # Helper function for downloading the fastqs.
-    msg "Downloading ${1}"
-    prefetch -q -O "${output}/prefetch" "${1}"
-    vdb-validate -q "${1}"
-    fastq-dump -I --gzip --split-files -O "${output}" "${1}"
+    # $1: SRX; $2: output folder
+    msg "Downloading ${1} in ${2}"
+    prefetch -q -O "${2}/prefetch" "${1}"
+    vdb-validate -q "${2}/prefetch/${1}"
+    fastq-dump -I --gzip --split-files -O "${2}" "${1}"
 }
 export -f download
 
 parse_params "$@"
 setup_colors
 
-# Create the output folder
+# Create the output folder and the temp folder for SRA prefetch
 msg "Creating output folder in ${output}"
-mkdir -p ${output}
+mkdir -p "${output}/prefetch"
 
 # Find all the SRA associated with the GEO id
 msg "Querying for all the SRA ids associated with ${geo}"
@@ -150,4 +151,4 @@ msg "Starting fastq downloads"
 esearch -db gds -query "${geo}[ACCN] AND GSM[ETYP]" | \
  efetch -format docsum | \
  xtract -pattern ExtRelation -element TargetObject | \
- xargs -n 1 -P "${cpu}" bash -c 'download "$@"'
+ xargs -t -n 1 -P "${cpu}" -I {} bash -c 'download {} '"${output}"
