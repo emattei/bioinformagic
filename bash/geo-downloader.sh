@@ -116,7 +116,7 @@ download(){
     # $1: SRX; $2: output folder
     msg "Downloading ${1} in ${2}"
     prefetch -q -O "${2}/prefetch" "${1}"
-    vdb-validate -q "${2}/prefetch/${1}"
+    vdb-validate -q "${2}/prefetch/${1}.sra"
     fastq-dump -I --gzip --split-files -O "${2}" "${1}"
 }
 export -f download
