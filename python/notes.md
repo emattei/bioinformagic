@@ -164,10 +164,24 @@ average = pipe(numbers,
                lambda x: sum(x) / len(x))
 print(average)
 
-# Equivalent but more legible to
+# Equivalent to but more legible than
 
 numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 average = sum(map(lambda n: n + 5, map(lambda n: n * 10, filter(lambda n: n % 2 == 0, numbers)))) / len(numbers)
 print(average)
 ```
 
+### Profiling
+```python
+python -m cProfile test.py
+```
+Returns:
+ - **ncalls**: The number of times the function was called.
+ - **tottime**: The total time spent in the function (excluding time spent in called functions).
+ - **percall**: The time spent per call (equals tottime divided by ncalls).
+ - **cumtime**: The cumulative time spent in the function, including time spent in called functions.
+ - **percall**: The cumulative time spent per call (equals cumtime divided by ncalls).
+
+ ```python
+ python -m timeit '"-".join(str(n) for n in range(100))'
+ ```
